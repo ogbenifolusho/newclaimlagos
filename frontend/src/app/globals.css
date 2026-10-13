@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: 222 47% 6%;
+  --foreground: 210 40% 98%;
+  --card: 222 47% 9%;
+  --primary: 142 71% 45%;
+  --primary-foreground: 144 100% 97%;
+  --destructive: 0 84% 60%;
+  --warning: 38 92% 50%;
+  --muted: 217 33% 17%;
+  --border: 217 33% 17%;
+}
+
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+/* Situation Room dense layout helpers */
+.sr-grid {
+  display: grid;
+  grid-template-columns: 280px 1fr 320px;
+  grid-template-rows: auto 1fr auto;
+  height: 100vh;
+  gap: 0.75rem;
+  padding: 0.75rem;
+}

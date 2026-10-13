@@ -1,0 +1,169 @@
+# CLAIM LAGOS - Optimized Docker Compose for Hostinger KVM 2
+# Specs: 2 vCPU, 8 GB RAM, 100 GB NVMe, 8 TB bandwidth
+# Resource limits are strict. OpenSearch and full Ollama are deferred.
+# Use Postgres full-text + pg_trgm instead of OpenSearch on this plan.
+# Local LLM (Ollama) is optional and only for very small models if RAM allows.
+
+version: "3.9"
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: claim-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - certbot_conf:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
+    depends_on:
+      - api
+      - frontend
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: 0.2
+    networks:
+      - claim-net
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: claim-frontend
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=http://api:8000
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.4
+    networks:
+      - claim-net
+
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: claim-api
+    env_file:
+      - ../backend/.env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://claim:claim_secret_change_me@postgres:5432/claim_lagos
+      - REDIS_URL=redis://redis:6379/0
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=claimminio
+      - MINIO_SECRET_KEY=claimminio_secret_change_me
+    volumes:
+      - ../backend:/app
+      - ../scripts:/scripts:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+    mem_limit: 768m
+    cpus: 0.5
+    networks:
+      - claim-net
+
+  worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: claim-worker
+    command: ["python", "-m", "app.worker"]
+    env_file:
+      - ../backend/.env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://claim:claim_secret_change_me@postgres:5432/claim_lagos
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - api
+      - redis
+      - postgres
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.3
+    networks:
+      - claim-net
+
+  postgres:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: claim-postgres
+    environment:
+      POSTGRES_USER: claim
+      POSTGRES_PASSWORD: claim_secret_change_me
+      POSTGRES_DB: claim_lagos
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ../scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U claim -d claim_lagos"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    mem_limit: 1536m
+    cpus: 0.6
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=256MB"
+      - "-c"
+      - "effective_cache_size=1GB"
+      - "-c"
+      - "maintenance_work_mem=128MB"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "max_connections=50"
+    networks:
+      - claim-net
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: claim-redis
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save ""
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    mem_limit: 288m
+    cpus: 0.15
+    networks:
+      - claim-net
+
+  minio:
+    image: minio/minio:latest
+    container_name: claim-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: claimminio
+      MINIO_ROOT_PASSWORD: claimminio_secret_change_me
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.15
+    networks:
+      - claim-net
+
+  # Optional: very lightweight monitoring. Disable if RAM is tight.
+  # prometheus:
+  #   image: prom/prometheus:v2.54.0
+  #   ...
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  certbot_conf:
+  certbot_www:
+
+networks:
+  claim-net:
+    driver: bridge
